@@ -267,7 +267,24 @@ async def me(user=Depends(get_current_user)):
 # ---------- Contests ----------
 @api_router.get("/contests")
 async def list_contests(user=Depends(get_current_user)):
-    contests = await db.contests.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    pipeline = [
+        {"$sort": {"created_at": -1}},
+        {"$lookup": {
+            "from": "entries",
+            "let": {"cid": "$id"},
+            "pipeline": [
+                {"$match": {"$expr": {"$and": [
+                    {"$eq": ["$contest_id", "$$cid"]},
+                    {"$in": ["$status", ["approved", "pending"]]},
+                ]}}},
+                {"$count": "n"},
+            ],
+            "as": "pc",
+        }},
+        {"$addFields": {"participants_count": {"$ifNull": [{"$arrayElemAt": ["$pc.n", 0]}, 0]}}},
+        {"$project": {"_id": 0, "pc": 0}},
+    ]
+    contests = await db.contests.aggregate(pipeline).to_list(500)
     # For non-admin, hide external_link unless user has approved entry
     if user["role"] != "admin":
         my_entries = await db.entries.find(
@@ -279,11 +296,6 @@ async def list_contests(user=Depends(get_current_user)):
             c["my_entry_status"] = st
             if st not in ("approved", "won"):
                 c["external_link"] = None
-    # Attach participant counts
-    for c in contests:
-        c["participants_count"] = await db.entries.count_documents(
-            {"contest_id": c["id"], "status": {"$in": ["approved", "pending"]}}
-        )
     return contests
 
 
@@ -393,11 +405,14 @@ async def create_entry(
 @api_router.get("/entries/mine")
 async def my_entries(user=Depends(get_current_user)):
     items = await db.entries.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    # Attach external link if approved
-    for it in items:
-        if it["status"] in ("approved", "won"):
-            c = await db.contests.find_one({"id": it["contest_id"]}, {"_id": 0})
-            it["external_link"] = c.get("external_link") if c else None
+    # Attach external link if approved/won (batched lookup)
+    ids = list({it["contest_id"] for it in items if it["status"] in ("approved", "won")})
+    if ids:
+        contests = await db.contests.find({"id": {"$in": ids}}, {"_id": 0, "id": 1, "external_link": 1}).to_list(len(ids))
+        link_by_contest = {c["id"]: c.get("external_link") for c in contests}
+        for it in items:
+            if it["status"] in ("approved", "won"):
+                it["external_link"] = link_by_contest.get(it["contest_id"])
     return items
 
 
@@ -577,13 +592,26 @@ async def decide_withdrawal(wid: str, body: ApproveBody, admin=Depends(require_a
 # ---------- Admin: users ----------
 @api_router.get("/admin/users")
 async def admin_users(admin=Depends(require_admin)):
-    users = await db.users.find({"role": "user"}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
-    for u in users:
-        u["entries_count"] = await db.entries.count_documents({"user_id": u["id"]})
-        u["total_won"] = 0
-        cur = db.entries.find({"user_id": u["id"], "status": "won"}, {"_id": 0, "winner_prize": 1})
-        async for e in cur:
-            u["total_won"] += e.get("winner_prize", 0)
+    pipeline = [
+        {"$match": {"role": "user"}},
+        {"$sort": {"created_at": -1}},
+        {"$lookup": {
+            "from": "entries",
+            "localField": "id",
+            "foreignField": "user_id",
+            "as": "entries",
+        }},
+        {"$addFields": {
+            "entries_count": {"$size": "$entries"},
+            "total_won": {"$sum": {"$map": {
+                "input": {"$filter": {"input": "$entries", "as": "e", "cond": {"$eq": ["$$e.status", "won"]}}},
+                "as": "e",
+                "in": {"$ifNull": ["$$e.winner_prize", 0]},
+            }}},
+        }},
+        {"$project": {"_id": 0, "password_hash": 0, "entries": 0}},
+    ]
+    users = await db.users.aggregate(pipeline).to_list(1000)
     return users
 
 

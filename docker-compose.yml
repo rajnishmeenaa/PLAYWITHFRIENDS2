@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # MongoDB Database Service
+  mongo:
+    image: mongo:7.0
+    container_name: pitchplay_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - pitchplay_net
+
+  # Backend FastAPI Service
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pitchplay_backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=pitchplay
+      - CORS_ORIGINS=*
+      - JWT_SECRET=${JWT_SECRET:-pitchplay_super_secure_jwt_secret_key_2026}
+      - ADMIN_MOBILE=${ADMIN_MOBILE:-9602341799}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ADMIN_UPI_ID=${ADMIN_UPI_ID:-9602341799@upi}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
+      - RAZORPAY_PAYMENT_LINK=${RAZORPAY_PAYMENT_LINK:-}
+    volumes:
+      - backend_uploads:/app/uploads
+    networks:
+      - pitchplay_net
+
+  # Frontend React + Nginx Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_BACKEND_URL=${REACT_APP_BACKEND_URL:-}
+    container_name: pitchplay_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "3000:80"
+    networks:
+      - pitchplay_net
+
+volumes:
+  mongo_data:
+  backend_uploads:
+
+networks:
+  pitchplay_net:
+    driver: bridge

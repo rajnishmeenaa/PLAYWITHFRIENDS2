@@ -88,6 +88,14 @@ frontend/node_modules/.cache/default-development/0.pack
 .env
 .env.*
 *.env
+!.env.example
+!*.env.example
 credentials.json
 *.key
 .credentials
+
+# Local uploads and test artifacts
+backend/uploads/*
+!backend/uploads/.gitkeep
+.pytest_cache/
+*.log

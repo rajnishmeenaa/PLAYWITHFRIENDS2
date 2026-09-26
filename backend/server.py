@@ -2001,16 +2001,67 @@ async def admin_adjust_wallet(user_id: str, body: WalletAdjustBody, admin=Depend
 
 @api_router.get("/admin/stats")
 async def admin_stats(admin=Depends(require_admin)):
+    # User stats
     total_users = await db.users.count_documents({"role": "user"})
-    total_contests = await db.contests.count_documents({})
-    pending_entries = await db.entries.count_documents({"status": "pending"})
-    pending_withdrawals = await db.withdrawals.count_documents({"status": "pending"})
+    verified_users = await db.users.count_documents({"role": "user", "kyc_verified": True})
+    blocked_users = await db.users.count_documents({"role": "user", "is_blocked": True})
+
+    # Contest stats
+    active_contests = await db.contests.count_documents({"status": "active"})
+    completed_contests = await db.contests.count_documents({"status": "completed"})
+    total_entries = await db.entries.count_documents({})
+
+    # Pending withdrawals
+    pending_withdrawals_count = await db.withdrawals.count_documents({"status": "pending"})
+    pending_wds = await db.withdrawals.find({"status": "pending"}).to_list(length=1000)
+    pending_withdrawals_amount = sum(w.get("amount", 0) for w in pending_wds)
+
+    # Revenue aggregation from wallet transactions
+    total_deposits = 0
+    total_winnings = 0
+    total_prize_pool = 0
+    total_referrals = 0
+    try:
+        deposit_pipeline = [
+            {"$match": {"type": "deposit", "status": "completed"}},
+            {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+        ]
+        dep_res = await db.transactions.aggregate(deposit_pipeline).to_list(length=1)
+        total_deposits = dep_res[0]["total"] if dep_res else 0
+
+        winning_pipeline = [
+            {"$match": {"type": "winning"}},
+            {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+        ]
+        win_res = await db.transactions.aggregate(winning_pipeline).to_list(length=1)
+        total_winnings = win_res[0]["total"] if win_res else 0
+
+        prize_res = await db.contests.aggregate([
+            {"$group": {"_id": None, "total": {"$sum": "$prize_pool"}}}
+        ]).to_list(length=1)
+        total_prize_pool = prize_res[0]["total"] if prize_res else 0
+
+        collections = await db.list_collection_names()
+        if "referrals" in collections:
+            total_referrals = await db.referrals.count_documents({})
+    except Exception:
+        pass
+
     return {
         "total_users": total_users,
-        "total_contests": total_contests,
-        "pending_entries": pending_entries,
-        "pending_withdrawals": pending_withdrawals,
+        "verified_users": verified_users,
+        "blocked_users": blocked_users,
+        "active_contests": active_contests,
+        "completed_contests": completed_contests,
+        "total_entries": total_entries,
+        "pending_withdrawals_count": pending_withdrawals_count,
+        "pending_withdrawals_amount": pending_withdrawals_amount,
+        "total_deposits": total_deposits,
+        "total_winnings": total_winnings,
+        "total_prize_pool": total_prize_pool,
+        "total_referrals": total_referrals,
     }
+
 
 
 # ---------- Files Endpoint ----------

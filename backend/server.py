@@ -26,10 +26,44 @@ load_dotenv(ROOT_DIR / '.env')
 UPLOAD_DIR = ROOT_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+
+def _build_mongo_url() -> Optional[str]:
+    """Resolves the MongoDB connection string.
+
+    Prefers Railway's MONGO_URL (provided by the MongoDB template). Falls back
+    to constructing a URL from the individual MONGOHOST/MONGOPORT/MONGOUSER/
+    MONGOPASSWORD variables, and finally to a local MONGO_URL/MONGODB_URI env
+    var for local development. Returns None if nothing is configured.
+    """
+    mongo_url = os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI')
+    if mongo_url:
+        return mongo_url
+
+    mongo_host = os.environ.get('MONGOHOST')
+    if mongo_host:
+        mongo_port = os.environ.get('MONGOPORT', '27017')
+        mongo_user = os.environ.get('MONGOUSER')
+        mongo_password = os.environ.get('MONGOPASSWORD')
+        if mongo_user and mongo_password:
+            return f"mongodb://{mongo_user}:{mongo_password}@{mongo_host}:{mongo_port}"
+        return f"mongodb://{mongo_host}:{mongo_port}"
+
+    return None
+
+
 # MongoDB
-mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get('DB_NAME', 'pitchplay')]
+mongo_url = _build_mongo_url()
+if mongo_url:
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[os.environ.get('DB_NAME', 'pitchplay')]
+else:
+    logging.getLogger(__name__).warning(
+        "No MongoDB connection configured (MONGO_URL/MONGOHOST not set). "
+        "Database-dependent features will be unavailable until a MongoDB "
+        "service is attached."
+    )
+    client = None
+    db = None
 
 # JWT / Admin config
 JWT_SECRET = os.environ.get('JWT_SECRET', 'pitchplay_super_secure_jwt_secret_key_2026')
@@ -2048,6 +2082,21 @@ async def contest_scheduler_loop():
 # ---------- Startup & Lifespan ----------
 @app.on_event("startup")
 async def startup():
+    if db is None:
+        logger.warning(
+            "Skipping startup DB checks: no MongoDB connection is configured. "
+            "Set MONGO_URL (or attach a MongoDB service) to enable database features."
+        )
+        return
+
+    try:
+        # Verify the connection is actually reachable before proceeding.
+        await client.admin.command("ping")
+    except Exception as e:
+        logger.warning(f"Could not connect to MongoDB at startup ({e}). "
+                        "Database-dependent features may be unavailable.")
+        return
+
     # Seed admin
     admin = await db.users.find_one({"mobile": ADMIN_MOBILE})
     if not admin:
@@ -2072,7 +2121,8 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    if client is not None:
+        client.close()
 
 
 app.include_router(api_router)

@@ -90,6 +90,8 @@ frontend/node_modules/.cache/default-development/0.pack
 *.env
 !.env.example
 !*.env.example
+!.env.production
+!frontend/.env.production
 credentials.json
 *.key
 .credentials

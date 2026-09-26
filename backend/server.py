@@ -124,6 +124,17 @@ app = FastAPI(title="PitchPlay API", version="2.0")
 api_router = APIRouter(prefix="/api")
 
 
+@app.get("/")
+@app.get("/health")
+async def root_health():
+    return {"status": "ok", "app": "PitchPlay API", "version": "2.0"}
+
+
+@api_router.get("/health")
+async def api_health():
+    return {"status": "ok", "app": "PitchPlay API", "version": "2.0"}
+
+
 # ---------- Utilities ----------
 def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
@@ -2048,22 +2059,25 @@ async def contest_scheduler_loop():
 # ---------- Startup & Lifespan ----------
 @app.on_event("startup")
 async def startup():
-    # Seed admin
-    admin = await db.users.find_one({"mobile": ADMIN_MOBILE})
-    if not admin:
-        await db.users.insert_one({
-            "id": str(uuid.uuid4()),
-            "name": "Admin",
-            "mobile": ADMIN_MOBILE,
-            "password_hash": hash_password(ADMIN_PASSWORD),
-            "role": "admin",
-            "wallet_balance": 0.0,
-            "referral_code": "ADMIN",
-            "created_at": now_iso(),
-        })
-        logger.info("Admin user seeded successfully")
-    else:
-        await db.users.update_one({"mobile": ADMIN_MOBILE}, {"$set": {"role": "admin"}})
+    # Seed admin safely
+    try:
+        admin = await db.users.find_one({"mobile": ADMIN_MOBILE})
+        if not admin:
+            await db.users.insert_one({
+                "id": str(uuid.uuid4()),
+                "name": "Admin",
+                "mobile": ADMIN_MOBILE,
+                "password_hash": hash_password(ADMIN_PASSWORD),
+                "role": "admin",
+                "wallet_balance": 0.0,
+                "referral_code": "ADMIN",
+                "created_at": now_iso(),
+            })
+            logger.info("Admin user seeded successfully")
+        else:
+            await db.users.update_one({"mobile": ADMIN_MOBILE}, {"$set": {"role": "admin"}})
+    except Exception as e:
+        logger.warning(f"Initial DB check warning: {e}. Will retry on incoming requests.")
 
     # Start contest scheduler in background
     asyncio.create_task(contest_scheduler_loop())
@@ -2072,14 +2086,28 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    try:
+        client.close()
+    except Exception:
+        pass
 
 
 app.include_router(api_router)
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+cors_raw = os.environ.get('CORS_ORIGINS', '*').strip()
+if cors_raw == "*" or "*" in cors_raw.split(','):
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    allowed_list = [o.strip() for o in cors_raw.split(',') if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )

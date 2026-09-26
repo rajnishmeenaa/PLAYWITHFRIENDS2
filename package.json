@@ -1,0 +1,10 @@
+{
+  "name": "pitchplay-root",
+  "version": "2.0.0",
+  "private": true,
+  "description": "PitchPlay Fantasy Platform Root Orchestrator",
+  "scripts": {
+    "build": "npm --prefix frontend install --legacy-peer-deps && npm --prefix frontend run build",
+    "start": "npm --prefix frontend start"
+  }
+}

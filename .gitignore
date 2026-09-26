@@ -101,3 +101,8 @@ backend/uploads/*
 !backend/uploads/.gitkeep
 .pytest_cache/
 *.log
+
+PitchPlayAdmin/node_modules/
+PitchPlayAdmin/.expo/
+PitchPlayAdmin/dist/
+PitchPlayAdmin/dist-test/
